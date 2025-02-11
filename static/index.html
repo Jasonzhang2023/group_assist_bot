@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram 消息记录</title>
+    <!-- 添加 Tailwind CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+        /* 基础样式 */
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f2f5;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .filter-section {
+            display: flex;
+            gap: 15px;
+            margin-top: 15px;
+            flex-wrap: wrap;
+        }
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .filter-group select {
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .messages {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .message {
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            margin-bottom: 10px;
+        }
+        .message:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+        }
+        .message-header {
+            display: flex;
+            justify-content: space-between;
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .message-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .message-content {
+            color: #1c1e21;
+            word-break: break-word;
+            margin: 10px 0;
+        }
+        .timestamp {
+            color: #888;
+            font-size: 0.8em;
+        }
+        .chat-title {
+            color: #0088cc;
+            font-weight: bold;
+        }
+        .user-name {
+            color: #1c1e21;
+            font-weight: bold;
+        }
+        .badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            margin-right: 5px;
+        }
+        .type-badge {
+            background-color: #e3f2fd;
+            color: #0d47a1;
+        }
+        .chat-badge {
+            background-color: #fff3e0;
+            color: #e65100;
+        }
+        .user-badge {
+            background-color: #f3e5f5;
+            color: #7b1fa2;
+        }
+        .media-content {
+            max-width: 300px;
+            margin: 10px 0;
+        }
+        .media-content img,
+        .media-content video {
+            max-width: 100%;
+            border-radius: 4px;
+            border: 1px solid #eee;
+        }
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-top: 20px;
+            gap: 10px;
+        }
+        .pagination button {
+            padding: 8px 15px;
+            border: none;
+            background-color: #0088cc;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .pagination button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .page-info {
+            color: #666;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+        .error {
+            color: #d32f2f;
+            background-color: #ffebee;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .refresh-button {
+            background-color: #0088cc;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .refresh-button:hover {
+            background-color: #006699;
+        }
+        .auto-refresh {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .message-form {
+            background-color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .form-input {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .send-button {
+            background-color: #0088cc;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            align-self: flex-start;
+        }
+        .send-button:hover {
+            background-color: #006699;
+        }
+        .send-button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .success-message {
+            color: #1b5e20;
+            background-color: #e8f5e9;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            display: none;
+        }
+        .message-actions {
+            margin-top: 10px;
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+        }
+        .reply-button, .mute-button {
+            padding: 4px 8px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: background-color 0.2s;
+        }
+        .reply-button {
+            background-color: #e3f2fd;
+            color: #0d47a1;
+        }
+        .reply-button:hover {
+            background-color: #bbdefb;
+        }
+        .mute-button {
+            background-color: #fce4ec;
+            color: #c2185b;
+        }
+        .mute-button:hover {
+            background-color: #f8bbd0;
+        }
+        .error-message {
+            color: #d32f2f;
+            background-color: #ffebee;
+            padding: 8px;
+            border-radius: 4px;
+            margin-top: 8px;
+            text-align: center;
+        }
+        .error-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            padding: 20px;
+        }
+        .retry-button {
+            background-color: #0088cc;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .retry-button:hover {
+            background-color: #006699;
+        }
+        .no-messages {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+        /* 卡片组件样式 */
+        .card {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        /* 自动禁言状态面板特定样式 */
+        .auto-mute-status {
+            position: sticky;
+            top: 20px;
+        }
+        /* 响应式布局调整 */
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+            .message-actions {
+                flex-direction: column;
+            }
+            .filter-section {
+                flex-direction: column;
+            }
+            .filter-group {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Telegram 消息记录</h1>
+            <div id="groupAdminRoot"></div>
+            <div class="message-form">
+                <h3>发送消息</h3>
+                <div class="form-group">
+                    <input type="text" id="chatId" placeholder="请输入聊天 ID（例如：12345678 或 -12345678）" class="form-input">
+                    <textarea id="messageContent" placeholder="请输入消息内容" class="form-input" rows="3"></textarea>
+                    <button onclick="sendMessage()" class="send-button">发送消息</button>
+                </div>
+                <div id="successMessage" class="success-message"></div>
+            </div>
+            <div class="filter-section">
+                <div class="filter-group">
+                    <label for="chatType">聊天类型：</label>
+                    <select id="chatType" onchange="updateFilters()">
+                        <option value="all">全部</option>
+                        <option value="private">私聊</option>
+                        <option value="group">群组</option>
+                        <option value="supergroup">超级群组</option>
+                        <option value="channel">频道</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="messageType">消息类型：</label>
+                    <select id="messageType" onchange="updateFilters()">
+                        <option value="all">全部</option>
+                        <option value="text">文本</option>
+                        <option value="photo">图片</option>
+                        <option value="video">视频</option>
+                        <option value="document">文档</option>
+                        <option value="sticker">贴纸</option>
+                        <option value="voice">语音</option>
+                        <option value="video_note">视频留言</option>
+                        <option value="animation">GIF</option>
+                        <option value="poll">投票</option>
+                    </select>
+                </div>
+            </div>
+            <div class="header-controls">
+                <button onclick="fetchMessages()" class="refresh-button">刷新消息</button>
+                <div class="auto-refresh">
+                    <input type="checkbox" id="autoRefresh" checked>
+                    <label for="autoRefresh">自动刷新</label>
+                </div>
+            </div>
+        </div>
+        <div class="messages" id="messages">
+            <div class="loading">加载消息中...</div>
+        </div>
+        <div class="pagination" id="pagination"></div>
+    </div>
+
+    <!-- 基础的 JavaScript -->
+    <script src="static/js/messages.js"></script>
+
+    <!-- React相关脚本 -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="static/js/GroupAdminPanel.js"></script>
+
+</body>
+</html>
