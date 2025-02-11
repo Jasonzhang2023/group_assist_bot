@@ -1,16 +1,7 @@
 1、新建必要的文件夹
 mkdir -p /home/tel_group_ass/static/js
 
-2、将必要的文件内容复制下来，并放入对应的文件夹，文件树如下：
-
-/home/tel_group_ass
-├── static
-│   ├── index.html
-│   ├── js
-│   │   ├── GroupAdminPanel.js
-│   │   └── messages.js
-│   └── login.html
-└── telegram-bot.py
+2、将必要的文件内容复制下来，并放入对应的文件夹
 
 
 文件都保存好后，记得改属性
