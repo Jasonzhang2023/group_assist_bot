@@ -8,8 +8,6 @@ mkdir -p /home/tel_group_ass/static/js
 chmod +x /home/tel_group_ass/telegram-bot.py /home/tel_group_ass/static/login.html /home/tel_group_ass/static/index.html
 chmod +x /home/tel_group_ass/static/js/GroupAdminPanel.js /home/tel_group_ass/static/js/messages.js
 
-或者你也可以直接从github上克隆下来（未完成，待补）
-
 这些文件你需要修改的地方有：
 telegram-bot.py中
 66行，你的机器人token api ：TOKEN = "your-token"
