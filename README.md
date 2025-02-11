@@ -11,6 +11,8 @@ mkdir -p /home/tel_group_ass/static/js
 │   │   └── messages.js
 │   └── login.html
 └── telegram-bot.py
+
+
 文件都保存好后，记得改属性
 chmod +x /home/tel_group_ass/telegram-bot.py /home/tel_group_ass/static/login.html /home/tel_group_ass/static/index.html
 chmod +x /home/tel_group_ass/static/js/GroupAdminPanel.js /home/tel_group_ass/static/js/messages.js
