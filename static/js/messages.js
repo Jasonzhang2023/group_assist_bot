@@ -2,9 +2,12 @@
 let currentPage = 1;
 let totalPages = 1;
 let autoRefreshInterval;
+// 在顶部添加群组筛选相关变量
 let currentFilters = {
     chatType: 'all',
-    messageType: 'all'
+    messageType: 'all',
+    groupId: 'all',
+    pageSize: 50  // 默认值
 };
 
 // 格式化时间戳
@@ -237,6 +240,7 @@ async function sendMessage() {
 }
 
 // 获取消息列表
+// 修改获取消息函数
 async function fetchMessages() {
     const messagesContainer = document.getElementById('messages');
     messagesContainer.innerHTML = '<div class="loading">加载消息中...</div>';
@@ -244,8 +248,10 @@ async function fetchMessages() {
     try {
         const queryParams = new URLSearchParams({
             page: currentPage,
+            per_page: currentFilters.pageSize,  // 使用选择的页面大小
             chat_type: currentFilters.chatType,
-            message_type: currentFilters.messageType
+            message_type: currentFilters.messageType,
+            group_id: currentFilters.groupId
         });
 
         const response = await fetch(`/messages?${queryParams}`);
@@ -262,6 +268,12 @@ async function fetchMessages() {
                 messagesContainer.appendChild(messageElement);
             });
             renderPagination(data.total, data.page, data.per_page);
+            
+            // 添加消息统计信息
+            const statsElement = document.createElement('div');
+            statsElement.className = 'message-stats';
+            statsElement.innerHTML = `显示第 ${(data.page - 1) * data.per_page + 1} 到 ${Math.min(data.page * data.per_page, data.total)} 条，共 ${data.total} 条消息`;
+            messagesContainer.insertBefore(statsElement, messagesContainer.firstChild);
         } else {
             messagesContainer.innerHTML = '<div class="no-messages">暂无消息</div>';
         }
@@ -276,13 +288,47 @@ async function fetchMessages() {
     }
 }
 
+// 添加获取群组列表的函数
+async function fetchGroups() {
+    try {
+        const response = await fetch('/api/groups');
+        if (!response.ok) throw new Error('Failed to fetch groups');
+        const data = await response.json();
+        
+        if (data.status === 'success') {
+            const groupFilter = document.getElementById('groupFilter');
+            if (groupFilter) {
+                // 保持"全部群组"选项
+                const currentValue = groupFilter.value;
+                groupFilter.innerHTML = '<option value="all">全部群组</option>';
+                
+                // 添加群组选项
+                data.groups.forEach(group => {
+                    const option = document.createElement('option');
+                    option.value = group.id;
+                    option.textContent = group.title;
+                    groupFilter.appendChild(option);
+                });
+                
+                // 恢复之前的选择（如果有）
+                groupFilter.value = currentValue;
+            }
+        }
+    } catch (error) {
+        console.error('Error fetching groups:', error);
+    }
+}
 // 自动刷新设置
+// 在自动刷新时也更新群组列表
 function setupAutoRefresh() {
     const autoRefreshCheckbox = document.getElementById('autoRefresh');
     
     function updateAutoRefresh() {
         if (autoRefreshCheckbox.checked) {
-            autoRefreshInterval = setInterval(fetchMessages, 5000);
+            autoRefreshInterval = setInterval(() => {
+                fetchMessages();
+                fetchGroups(); // 定期更新群组列表
+            }, 5000);
         } else {
             clearInterval(autoRefreshInterval);
         }
@@ -292,22 +338,28 @@ function setupAutoRefresh() {
     updateAutoRefresh();
 }
 
-// 更新过滤器
+// 修改更新过滤器函数
 function updateFilters() {
     const chatType = document.getElementById('chatType').value;
     const messageType = document.getElementById('messageType').value;
+    const groupId = document.getElementById('groupFilter').value;
+    const pageSize = parseInt(document.getElementById('pageSize').value);
     
     currentFilters = {
         chatType,
-        messageType
+        messageType,
+        groupId,
+        pageSize
     };
     
-    currentPage = 1;
+    currentPage = 1;  // 重置到第一页
     fetchMessages();
 }
 
 // 页面初始化
+// 更新页面初始化函数
 document.addEventListener('DOMContentLoaded', () => {
+    fetchGroups(); // 获取群组列表
     fetchMessages();
     setupAutoRefresh();
 });

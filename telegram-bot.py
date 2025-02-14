@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify, session, redirect, url_for, send_file
+from config import *
+from flask import Flask, request, jsonify, session, redirect, url_for, send_file, render_template
 from datetime import timedelta
 import httpx
 import telegram
@@ -22,13 +23,40 @@ from telegram import ChatPermissions
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import time
+from telegram import ChatMember
+import re
+
+# 1. 首先创建 logger
+logger = logging.getLogger('TelegramBot')
+
+# 2. 创建日志处理器
+handler = RotatingFileHandler(
+    LOGGING['FILE_PATH'], 
+    maxBytes=LOGGING['MAX_BYTES'], 
+    backupCount=LOGGING['BACKUP_COUNT']
+)
+
+# 3. 创建格式化器
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+
+# 4. 添加处理器到 logger
+logger.addHandler(handler)
+
+# 5. 设置日志级别
+logger.setLevel(LOGGING['LEVEL'])
+
+# 6. 基础目录配置
+app = Flask(__name__,
+    static_folder=STATIC['FOLDER'],
+    static_url_path=STATIC['URL_PATH'])
+app.secret_key = SERVER['SECRET_KEY']
 
 
-# 基础目录配置
-BASE_DIR = '/home/tel_group_ass'
-LOG_DIR = os.path.join(BASE_DIR, 'logs')
-DB_DIR = os.path.join(BASE_DIR, 'data')
-FILES_DIR = os.path.join(DB_DIR, 'files')
+ACCESS_TOKEN = SERVER['ACCESS_TOKEN']
+DB_PATH = DATABASE['PATH']
+
+CHINA_TZ = pytz.timezone(TIMEZONE)
 
 # 确保目录存在
 def init_directories():
@@ -47,30 +75,15 @@ def init_directories():
         except Exception as e:
             print(f"Failed to create/check directory {directory}: {str(e)}")
             raise
-CHINA_TZ = pytz.timezone('Asia/Shanghai')
+
 # 先创建目录
 init_directories()
 
-# 然后配置日志系统
-log_file = os.path.join(LOG_DIR, 'telegram_bot.log')
-handler = RotatingFileHandler(log_file, maxBytes=250*1024*1024, backupCount=10)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
-
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-logger.addHandler(handler)
-
-
-# 机器人配置
-TOKEN = "your-token"
-ADMIN_ID = 66666666
-WEBHOOK_URL = "https://your.website.com/webhook"
 
 # Bot 管理器类
 class TelegramBotManager:
-    def __init__(self, token):
-        self.token = token
+    def __init__(self):
+        self.token = TELEGRAM['BOT_TOKEN']
         self._request = None
         self.bot = None
         self._initialized = False
@@ -83,11 +96,11 @@ class TelegramBotManager:
                 try:
                     # 为每个新的事件循环创建新的请求对象
                     self._request = HTTPXRequest(
-                        connection_pool_size=100,
-                        connect_timeout=30.0,
-                        read_timeout=30.0,
-                        write_timeout=30.0,
-                        pool_timeout=3.0
+                        connection_pool_size=HTTP['CONNECTION_POOL_SIZE'],
+                        connect_timeout=HTTP['CONNECT_TIMEOUT'],
+                        read_timeout=HTTP['READ_TIMEOUT'],
+                        write_timeout=HTTP['WRITE_TIMEOUT'],
+                        pool_timeout=HTTP['POOL_TIMEOUT']
                     )
                     self.bot = telegram.Bot(token=self.token, request=self._request)
                     await self.bot.get_me()
@@ -119,19 +132,8 @@ class TelegramBotManager:
             raise
 
 # 创建全局 bot 管理器
-bot_manager = TelegramBotManager(TOKEN)
+bot_manager = TelegramBotManager()
 
-# 初始化 Flask 应用
-app = Flask(__name__,
-    static_folder='/home/tel_group_ass/static',
-    static_url_path='/static')
-app.secret_key = 'your-super-secret-key-here'
-
-# 设置访问令牌
-ACCESS_TOKEN = "passwall"
-
-# 数据库配置
-DB_PATH = os.path.join(DB_DIR, 'messages.db')
 
 class TaskManager:
     def __init__(self):
@@ -145,6 +147,12 @@ class TaskManager:
             try:
                 logger.info(f"[定时任务] 开始执行任务 {task_id}, 延迟 {delay} 秒")
                 time.sleep(delay)
+                
+                # 检查任务是否被取消
+                with self._lock:
+                    if task_id not in self._tasks:
+                        logger.info(f"[定时任务] 任务 {task_id} 已被取消，不执行")
+                        return
                 
                 # 创建新的事件循环
                 loop = asyncio.new_event_loop()
@@ -170,6 +178,8 @@ class TaskManager:
                     loop.close()
                     asyncio.set_event_loop(None)
                     
+            except asyncio.CancelledError:
+                logger.info(f"[定时任务] 任务 {task_id} 被取消")
             except Exception as e:
                 logger.error(f"[定时任务] 任务 {task_id} 执行失败: {str(e)}", exc_info=True)
             finally:
@@ -180,8 +190,12 @@ class TaskManager:
         with self._lock:
             # 如果已存在相同ID的任务，先取消它
             if task_id in self._tasks:
-                self._tasks[task_id].cancel()
-                logger.info(f"[定时任务] 取消已存在的任务 {task_id}")
+                try:
+                    self._tasks[task_id].cancel()
+                    logger.info(f"[定时任务] 取消已存在的任务 {task_id}")
+                except Exception as e:
+                    logger.error(f"[定时任务] 取消任务 {task_id} 时出错: {str(e)}")
+                self._tasks.pop(task_id, None)
             
             # 提交新任务
             future = self.executor.submit(delayed_task)
@@ -227,6 +241,35 @@ def init_db():
         c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='auto_mute_settings'")
         auto_mute_exists = c.fetchone() is not None
         
+        # 检查入群验证设置表
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='join_settings'")
+        join_settings_exists = c.fetchone() is not None
+        
+        # 检查待验证用户表
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='pending_members'")
+        pending_members_exists = c.fetchone() is not None
+
+        # 检查垃圾信息过滤设置表
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='spam_filter_settings'")
+        spam_filter_exists = c.fetchone() is not None
+        
+        # 添加这段新代码：检查白名单表
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='spam_filter_whitelist'")
+        whitelist_exists = c.fetchone() is not None
+
+        if not spam_filter_exists:
+            c.execute('''
+                CREATE TABLE spam_filter_settings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL UNIQUE,
+                    enabled BOOLEAN DEFAULT 0,
+                    rules TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            logger.info("Created spam_filter_settings table")
+
         # 创建必要的表
         if not messages_exists:
             c.execute('''
@@ -264,7 +307,57 @@ def init_db():
                 )
             ''')
             logger.info("Created new auto_mute_settings table")
+
+        if not join_settings_exists:
+            c.execute('''
+                CREATE TABLE join_settings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL UNIQUE,
+                    enabled BOOLEAN DEFAULT 0,
+                    verify_type TEXT DEFAULT 'question',
+                    question TEXT,
+                    answer TEXT,
+                    welcome_message TEXT,
+                    timeout INTEGER DEFAULT 300,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            logger.info("Created join_settings table")
         
+        if not pending_members_exists:
+            c.execute('''
+                CREATE TABLE pending_members (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    username TEXT,
+                    full_name TEXT,
+                    join_time DATETIME NOT NULL,
+                    verify_deadline DATETIME NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(chat_id, user_id)
+                )
+            ''')
+            logger.info("Created pending_members table")
+        
+        if not whitelist_exists:
+            c.execute('''
+                CREATE TABLE spam_filter_whitelist (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    username TEXT,
+                    full_name TEXT,
+                    added_by INTEGER NOT NULL,
+                    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    note TEXT,
+                    UNIQUE(chat_id, user_id)
+                )
+            ''')
+            logger.info("Created spam_filter_whitelist table")
+
         conn.commit()
         logger.info("Database initialized successfully")
         
@@ -334,7 +427,7 @@ async def download_file(file):
                 actual_path = file_info.file_path
                 if "https://" in actual_path:
                     # 提取实际的文件路径部分
-                    actual_path = actual_path.split("/file/bot" + TOKEN + "/")[-1]
+                    actual_path = actual_path.split("/file/bot" + TELEGRAM['BOT_TOKEN'] + "/")[-1]
                 
                 file_ext = os.path.splitext(actual_path)[1] or '.jpg'
                 logger.info(f"Got file info: {actual_path}")
@@ -351,7 +444,7 @@ async def download_file(file):
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         
         # 构建下载URL，使用处理后的路径
-        download_url = f"https://api.telegram.org/file/bot{TOKEN}/{actual_path}"
+        download_url = f"https://api.telegram.org/file/bot{TELEGRAM['BOT_TOKEN']}/{actual_path}"
         logger.info(f"Attempting to download from: {download_url}")
         
         timeout = httpx.Timeout(30.0)
@@ -383,6 +476,8 @@ def login_required(f):
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated_function
+
+
 
 @app.route('/auto_mute/delete', methods=['POST'])
 @login_required
@@ -558,6 +653,7 @@ async def auto_mute_settings():
         return jsonify({'status': 'error', 'message': str(e)}), 500
     finally:
         conn.close()
+
 @app.route('/webhook', methods=['POST'])
 @async_route
 async def webhook():
@@ -569,24 +665,207 @@ async def webhook():
         update = Update.de_json(data, bot_manager.bot)
         logger.info(f"Update object created: {update}")
         
-        if update.message or update.channel_post:
-            message = update.channel_post if update.channel_post else update.message
+        if update.message:
+            message = update.message
             chat_id = message.chat.id
             chat_type = message.chat.type
             
             logger.info(f"Processing message from chat {chat_id} of type {chat_type}")
             
+            # 首先进行垃圾信息检测
+            if chat_type in ['group', 'supergroup'] and (message.text or message.caption):
+                logger.info(f"[消息处理] 开始检查是否为垃圾信息")
+                is_spam, action = await check_spam(message, chat_id)
+                if is_spam:
+                    logger.info(f"[消息处理] 检测到垃圾信息，action={action}")
+                    try:
+                        async with bot_manager.get_bot() as bot:
+                            # 根据不同动作执行不同操作
+                            if action == 'delete':
+                                # 仅在动作为delete时删除消息
+                                await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                                logger.info(f"[消息处理] 已删除垃圾消息: chat_id={chat_id}, message_id={message.message_id}")
+                            
+                            if action == 'warn':
+                                warning_text = f"⚠️ {message.from_user.mention_html()} 请不要发送垃圾信息"
+                                await bot.send_message(
+                                    chat_id=chat_id,
+                                    text=warning_text,
+                                    parse_mode='HTML'
+                                )
+                            elif action == 'mute':
+                                # 删除消息并禁言
+                                await bot.delete_message(chat_id=chat_id, message_id=message.message_id)
+                                permissions = ChatPermissions(
+                                    can_send_messages=False,
+                                    can_send_polls=False,
+                                    can_send_other_messages=False,
+                                    can_add_web_page_previews=False
+                                )
+                                await bot.restrict_chat_member(
+                                    chat_id=chat_id,
+                                    user_id=message.from_user.id,
+                                    permissions=permissions,
+                                    until_date=datetime.now() + timedelta(minutes=10)
+                                )
+                                mute_text = f"🚫 {message.from_user.mention_html()} 因发送垃圾信息已被禁言10分钟"
+                                await bot.send_message(
+                                    chat_id=chat_id,
+                                    text=mute_text,
+                                    parse_mode='HTML'
+                                )
+                            return jsonify({'status': 'success'})
+                    except Exception as e:
+                        logger.error(f"Error handling spam message: {str(e)}")
+
+            # 处理新成员加入
+            if message.new_chat_members:
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                
+                try:
+                    # 清理用户旧的验证记录
+                    for new_member in message.new_chat_members:
+                        if not new_member.is_bot:
+                            c.execute('''
+                                DELETE FROM pending_members 
+                                WHERE chat_id = ? AND user_id = ?
+                            ''', (chat_id, new_member.id))
+                            conn.commit()
+                            logger.info(f"Cleared old verification records for user {new_member.id}")
+
+                    # 检查是否启用了入群验证
+                    c.execute('''
+                        SELECT enabled, verify_type, question, answer, 
+                               welcome_message, timeout
+                        FROM join_settings 
+                        WHERE chat_id = ? AND enabled = 1
+                    ''', (chat_id,))
+                    
+                    settings = c.fetchone()
+                    logger.info(f"Verification settings for chat {chat_id}: {settings}")
+                    
+                    if settings:
+                        enabled, verify_type, question, answer, welcome_msg, timeout = settings
+                        
+                        for new_member in message.new_chat_members:
+                            if not new_member.is_bot:
+                                # 记录待验证用户
+                                join_time = datetime.now(CHINA_TZ)
+                                verify_deadline = join_time + timedelta(seconds=timeout)
+                                
+                                try:
+                                    c.execute('''
+                                        INSERT INTO pending_members 
+                                        (chat_id, user_id, username, full_name, 
+                                         join_time, verify_deadline, status)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                                    ''', (
+                                        chat_id, new_member.id, new_member.username,
+                                        new_member.full_name, join_time.strftime('%Y-%m-%d %H:%M:%S'),
+                                        verify_deadline.strftime('%Y-%m-%d %H:%M:%S'), 'pending'
+                                    ))
+                                    conn.commit()
+                                    logger.info(f"Added new pending verification for user {new_member.id}")
+                                    
+                                    # 限制新用户权限
+                                    async with bot_manager.get_bot() as bot:
+                                        permissions = ChatPermissions(
+                                            can_send_messages=False,
+                                            can_send_polls=False,
+                                            can_send_other_messages=False,
+                                            can_add_web_page_previews=False
+                                        )
+                                        await bot.restrict_chat_member(
+                                            chat_id=chat_id,
+                                            user_id=new_member.id,
+                                            permissions=permissions
+                                        )
+                                        logger.info(f"Restricted permissions for user {new_member.id}")
+                                        
+                                        if verify_type == 'question':
+                                            try:
+                                                # 先在群里发送简单通知（自动删除）
+                                                group_msg = (
+                                                    f"👋 欢迎 {new_member.mention_html()}\n"
+                                                    "验证消息已通过私聊发送，请查收。"
+                                                )
+                                                await send_auto_delete_message(
+                                                    bot=bot,
+                                                    chat_id=chat_id,
+                                                    text=group_msg,
+                                                    parse_mode='HTML'
+                                                )
+                                                
+                                                # 通过私聊发送验证问题
+                                                verify_msg = (
+                                                    f"👋 您好！要加入群组，请先回答以下问题：\n\n"
+                                                    f"❓ {question}\n\n"
+                                                    f"⏰ 请在 {timeout} 秒内回复答案\n\n"
+                                                    "⚠️ 注意：请直接回复答案，不需要附加其他内容"
+                                                )
+                                                await bot.send_message(
+                                                    chat_id=new_member.id,
+                                                    text=verify_msg
+                                                )
+                                                logger.info(f"Sent verification question to user {new_member.id}")
+                                                
+                                            except telegram.error.Forbidden:
+                                                # 如果用户没有启用私聊，发送提醒
+                                                warning_msg = (
+                                                    f"{new_member.mention_html()}，由于您的隐私设置，机器人无法向您发送私聊消息。\n"
+                                                    "请先点击 @your_bot_username 启用私聊，然后重新加入群组。"
+                                                )
+                                                await send_auto_delete_message(
+                                                    bot=bot,
+                                                    chat_id=chat_id,
+                                                    text=warning_msg,
+                                                    parse_mode='HTML'
+                                                )
+                                                # 移除用户
+                                                await bot.ban_chat_member(chat_id=chat_id, user_id=new_member.id)
+                                                await bot.unban_chat_member(chat_id=chat_id, user_id=new_member.id)
+                                        else:
+                                            # 管理员审核模式
+                                            verify_msg = (
+                                                f"👋 欢迎 {new_member.mention_html()}\n\n"
+                                                "⌛️ 请等待管理员验证\n\n"
+                                                f"⏰ 验证时限：{timeout} 秒"
+                                            )
+                                            await send_auto_delete_message(
+                                                bot=bot,
+                                                chat_id=chat_id,
+                                                text=verify_msg,
+                                                parse_mode='HTML'
+                                            )
+                                            logger.info(f"Set up admin verification for user {new_member.id}")
+                                        
+                                        # 创建超时任务
+                                        task_id = f"verify_{chat_id}_{new_member.id}"
+                                        task_manager.schedule_task(
+                                            task_id,
+                                            lambda bot: handle_verification_timeout(bot, chat_id, new_member.id),
+                                            timeout
+                                        )
+                                        logger.info(f"Scheduled timeout task for user {new_member.id}")
+                                
+                                except sqlite3.IntegrityError as e:
+                                    logger.error(f"Database error adding user {new_member.id}: {e}")
+                finally:
+                    conn.close()
+
+            # 处理常规消息
             # 安全地获取用户信息
             user = message.from_user
             user_full_name = "未知用户"
             user_name = "unknown"
             user_id = None
-            
+
             if user:
                 user_full_name = user.full_name or f"{user.first_name or ''} {user.last_name or ''}".strip() or "未知用户"
                 user_name = user.username or user_full_name
                 user_id = user.id
-            
+
             # 根据不同类型设置标题和用户名
             if chat_type == 'private':
                 chat_title = f"与 {user_full_name} 的私聊"
@@ -604,7 +883,8 @@ async def webhook():
                 chat_title = message.chat.title or "未知类型聊天"
             
             logger.info(f"Message details: chat_title={chat_title}, user_name={user_name}")
-            
+
+            message_content = message.text or ''
             message_data = {
                 'timestamp': datetime.now(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S UTC'),
                 'chat_id': chat_id,
@@ -661,16 +941,551 @@ async def webhook():
             logger.info(f"Final message_data: {message_data}")
             save_message(message_data)
             logger.info(f"Message saved to database")
-            
-            return jsonify({'status': 'success'})
-        else:
-            logger.info("Update contains no message or channel post")
-            return jsonify({'status': 'success', 'message': 'No message or channel post in update'})
-            
-    except Exception as e:
-        logger.error(f"Error processing update: {str(e)}", exc_info=True)
-        return jsonify({'status': 'error', 'message': str(e)})
 
+        elif update.channel_post:
+            # 处理频道消息
+            message = update.channel_post
+            chat_id = message.chat.id
+            chat_type = message.chat.type
+            chat_title = message.chat.title or "未命名频道"
+            user_name = message.author_signature or "频道管理员"
+            
+            message_data = {
+                'timestamp': datetime.now(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S UTC'),
+                'chat_id': chat_id,
+                'chat_title': chat_title,
+                'user_name': user_name,
+                'from_user_id': None,
+                'message_type': 'text',
+                'message_content': '',
+                'file_path': None,
+                'chat_type': chat_type,
+                'is_topic_message': False,
+                'topic_id': None,
+                'forward_from': None
+            }
+            
+            # 处理不同类型的频道消息
+            if hasattr(message, 'text') and message.text:
+                message_data['message_type'] = 'text'
+                message_data['message_content'] = message.text
+                logger.info(f"Channel text message: {message.text}")
+            elif hasattr(message, 'photo') and message.photo:
+                message_data['message_type'] = 'photo'
+                message_data['message_content'] = getattr(message, 'caption', '') or ''
+                message_data['file_path'] = await download_file(message.photo[-1])
+                logger.info("Channel photo message processed")
+            elif hasattr(message, 'video') and message.video:
+                message_data['message_type'] = 'video'
+                message_data['message_content'] = getattr(message, 'caption', '') or ''
+                message_data['file_path'] = await download_file(message.video)
+                logger.info("Channel video message processed")
+            elif hasattr(message, 'document') and message.document:
+                message_data['message_type'] = 'document'
+                message_data['message_content'] = getattr(message, 'caption', '') or ''
+                message_data['file_path'] = await download_file(message.document)
+                logger.info("Channel document message processed")
+            
+            logger.info(f"Final channel message data: {message_data}")
+            save_message(message_data)
+            logger.info(f"Channel message saved to database")
+        
+        return jsonify({'status': 'success'})
+
+    except Exception as e:
+        logger.error(f"Error processing webhook update: {str(e)}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+# 添加任务取消方法到TaskManager类
+    def cancel_task(self, task_id):
+        """取消指定的任务"""
+        with self._lock:
+            if task_id in self._tasks:
+                try:
+                    self._tasks[task_id].cancel()
+                    logger.info(f"[定时任务] 任务 {task_id} 已取消")
+                except Exception as e:
+                    logger.error(f"[定时任务] 取消任务 {task_id} 时出错: {str(e)}")
+                self._tasks.pop(task_id, None)
+
+    def cleanup(self):
+        """清理所有任务"""
+        with self._lock:
+            for task_id, future in self._tasks.items():
+                try:
+                    future.cancel()
+                    logger.info(f"[定时任务] 任务 {task_id} 已在清理时取消")
+                except Exception as e:
+                    logger.error(f"[定时任务] 清理任务 {task_id} 时出错: {str(e)}")
+            self._tasks.clear()
+            logger.info("[定时任务] 所有任务已清理")
+
+# 修改TaskManager的schedule_task方法以支持取消已存在的任务
+def schedule_task(self, task_id, func, delay):
+    """调度一个延迟执行的任务，如果已存在同ID的任务则先取消"""
+    with self._lock:
+        # 如果已存在相同ID的任务，先取消它
+        if task_id in self._tasks:
+            self._tasks[task_id].cancel()
+            self._tasks.pop(task_id)
+            logger.info(f"[定时任务] 取消已存在的任务 {task_id}")
+        
+        # 提交新任务
+        future = self.executor.submit(self._run_task, task_id, func, delay)
+        self._tasks[task_id] = future
+        logger.info(f"[定时任务] 已调度任务 {task_id}, 将在 {delay} 秒后执行")
+        
+def _run_task(self, task_id, func, delay):
+    """运行任务的内部方法"""
+    try:
+        logger.info(f"[定时任务] 开始执行任务 {task_id}, 延迟 {delay} 秒")
+        time.sleep(delay)
+        
+        # 创建新的事件循环
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            # 创建新的 bot 实例
+            request = HTTPXRequest(
+                connection_pool_size=1,
+                connect_timeout=30.0,
+                read_timeout=30.0,
+                write_timeout=30.0,
+                pool_timeout=3.0
+            )
+            bot = telegram.Bot(token=TOKEN, request=request)
+            
+            # 执行异步操作
+            coroutine = func(bot)
+            result = loop.run_until_complete(coroutine)
+            logger.info(f"[定时任务] 任务 {task_id} 执行成功")
+            return result
+        finally:
+            loop.close()
+            asyncio.set_event_loop(None)
+            
+    except asyncio.CancelledError:
+        logger.info(f"[定时任务] 任务 {task_id} 被取消")
+    except Exception as e:
+        logger.error(f"[定时任务] 任务 {task_id} 执行失败: {str(e)}", exc_info=True)
+    finally:
+        with self._lock:
+            self._tasks.pop(task_id, None)
+            logger.info(f"[定时任务] 任务 {task_id} 已从队列中移除")
+# 新增：验证超时处理函数
+async def handle_verification_timeout(bot, chat_id: int, user_id: int):
+    """处理验证超时"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        # 检查用户状态
+        c.execute('''
+            SELECT status
+            FROM pending_members
+            WHERE chat_id = ? AND user_id = ?
+        ''', (chat_id, user_id))
+        
+        result = c.fetchone()
+        if result and result[0] == 'pending':
+            # 更新状态为超时
+            c.execute('''
+                UPDATE pending_members
+                SET status = 'timeout'
+                WHERE chat_id = ? AND user_id = ?
+            ''', (chat_id, user_id))
+            conn.commit()
+            
+            # 踢出用户
+            try:
+                await bot.ban_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id
+                )
+                # 立即解封以允许用户再次加入
+                await bot.unban_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    only_if_banned=True
+                )
+                
+                # 发送超时通知
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"⏰ 验证超时，用户已被移出群组"
+                )
+                
+            except telegram.error.BadRequest as e:
+                logger.error(f"Error kicking user {user_id} from chat {chat_id}: {e}")
+                
+    except Exception as e:
+        logger.error(f"Error handling verification timeout: {str(e)}")
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+async def send_auto_delete_message(bot, chat_id, text, parse_mode=None, reply_to_message_id=None, delete_after=15):
+    """
+    发送一条消息并在指定时间后自动删除
+    
+    参数:
+        bot: 机器人实例
+        chat_id: 聊天ID
+        text: 消息文本
+        parse_mode: 解析模式（可选）
+        reply_to_message_id: 回复的消息ID（可选）
+        delete_after: 多少秒后删除消息（默认15秒）
+    """
+    try:
+        # 发送消息
+        sent_message = await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=parse_mode,
+            reply_to_message_id=reply_to_message_id
+        )
+        
+        # 创建一个延时删除任务
+        async def delete_message(bot):
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=sent_message.message_id)
+                logger.info(f"Auto-deleted message {sent_message.message_id} in chat {chat_id}")
+            except Exception as e:
+                logger.error(f"Failed to delete message {sent_message.message_id}: {str(e)}")
+        
+        task_id = f"delete_msg_{chat_id}_{sent_message.message_id}"
+        task_manager.schedule_task(task_id, delete_message, delete_after)
+        logger.info(f"Scheduled message {sent_message.message_id} for deletion in {delete_after} seconds")
+        
+        return sent_message
+        
+    except Exception as e:
+        logger.error(f"Error in send_auto_delete_message: {str(e)}")
+        return None
+# 修改检查垃圾信息的函数
+async def check_spam(message, chat_id):
+    """检查消息是否为垃圾信息，支持白名单"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        logger.info(f"[垃圾检测] 开始检查消息: chat_id={chat_id}")
+        
+        # 首先检查用户是否在白名单中
+        user_id = message.from_user.id
+        c.execute('''
+            SELECT 1 FROM spam_filter_whitelist 
+            WHERE chat_id = ? AND user_id = ?
+        ''', (chat_id, user_id))
+        
+        if c.fetchone():
+            logger.info(f"[垃圾检测] 用户 {user_id} 在白名单中，跳过检查")
+            return False, None
+        
+        # 获取垃圾信息过滤设置
+        c.execute('''
+            SELECT enabled, rules
+            FROM spam_filter_settings 
+            WHERE chat_id = ? AND enabled = 1
+        ''', (chat_id,))
+        
+        row = c.fetchone()
+        if not row:
+            logger.info(f"[垃圾检测] 未找到启用的过滤规则: chat_id={chat_id}")
+            return False, None
+        
+        enabled, rules = row
+        if not enabled:
+            logger.info(f"[垃圾检测] 过滤功能未启用: chat_id={chat_id}")
+            return False, None
+        
+        rules = json.loads(rules)
+        logger.info(f"[垃圾检测] 加载规则: {rules}")
+        
+        if not rules:
+            logger.info(f"[垃圾检测] 无规则配置: chat_id={chat_id}")
+            return False, None
+        
+        # 检查消息内容
+        message_text = message.text or message.caption or ''
+        if not message_text:
+            logger.info(f"[垃圾检测] 无消息内容")
+            return False, None
+        
+        logger.info(f"[垃圾检测] 检查消息内容: {message_text}")
+        
+        for rule in rules:
+            match_found = False
+            action = rule['action']
+            
+            logger.info(f"[垃圾检测] 检查规则: type={rule['type']}, content={rule['content']}")
+            
+            if rule['type'] == 'keyword':
+                match_found = rule['content'].lower() in message_text.lower()
+            elif rule['type'] == 'url':
+                if not rule['content'] or rule['content'] == '*':
+                    url_pattern = r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+                    match_found = bool(re.search(url_pattern, message_text))
+                else:
+                    urls = re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', message_text)
+                    match_found = any(rule['content'].lower() in url.lower() for url in urls)
+            elif rule['type'] == 'regex':
+                try:
+                    pattern = re.compile(rule['content'], re.IGNORECASE)
+                    match_found = bool(pattern.search(message_text))
+                except re.error:
+                    logger.error(f"[垃圾检测] 无效的正则表达式: {rule['content']}")
+                    continue
+            
+            if match_found:
+                logger.info(f"[垃圾检测] 发现匹配规则: type={rule['type']}, action={action}")
+                return True, action
+        
+        logger.info(f"[垃圾检测] 未发现垃圾信息")
+        return False, None
+        
+    except Exception as e:
+        logger.error(f"[垃圾检测] 检查出错: {str(e)}", exc_info=True)
+        return False, None
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+async def handle_verification_success(bot, user_id, group_id, message, welcome_msg, task_id):
+    """处理验证成功的情况"""
+    try:
+        # 解除限制
+        permissions = ChatPermissions(
+            can_send_messages=True,
+            can_send_polls=True,
+            can_send_other_messages=True,
+            can_add_web_page_previews=True
+        )
+        await bot.restrict_chat_member(
+            chat_id=group_id,
+            user_id=user_id,
+            permissions=permissions
+        )
+        logger.info(f"Permissions restored for user {user_id}")
+        
+        # 发送私聊通过消息（私聊消息不自动删除）
+        await bot.send_message(
+            chat_id=user_id,
+            text="✅ 验证通过！您现在可以在群组内发言了。"
+        )
+        
+        # 在群组发送通过通知（自动删除）
+        success_msg = f"✅ 用户 {message.from_user.mention_html()} 已通过验证，欢迎加入！"
+        await send_auto_delete_message(
+            bot=bot,
+            chat_id=group_id,
+            text=success_msg,
+            parse_mode='HTML'
+        )
+        
+        # 发送欢迎消息（自动删除）
+        if welcome_msg:
+            await send_auto_delete_message(
+                bot=bot,
+                chat_id=group_id,
+                text=welcome_msg,
+                parse_mode='HTML'
+            )
+
+        # 尝试取消超时任务
+        try:
+            task_manager.cancel_task(task_id)
+            logger.info(f"Verification completed successfully for user {user_id}")
+        except AttributeError:
+            logger.warning(f"Could not cancel task {task_id}, but verification was successful")
+        except Exception as e:
+            logger.error(f"Error canceling task {task_id}: {str(e)}")
+
+    except Exception as e:
+        logger.error(f"Error in verification success flow: {str(e)}", exc_info=True)
+        await bot.send_message(
+            chat_id=user_id,
+            text="❌ 处理验证时出现错误，但您的答案是正确的。请尝试在群组中发言，如果仍有问题请联系管理员。"
+        )
+
+# 新增：清理过期验证记录的定时任务
+async def clean_expired_verifications():
+    """清理过期的验证记录"""
+    while True:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            
+            # 删除已完成的过期记录
+            c.execute('''
+                DELETE FROM pending_members
+                WHERE status != 'pending'
+                AND datetime(verify_deadline) < datetime('now')
+            ''')
+            
+            conn.commit()
+            logger.info("Cleaned expired verification records")
+            
+        except Exception as e:
+            logger.error(f"Error cleaning expired verifications: {str(e)}")
+        finally:
+            if 'conn' in locals():
+                conn.close()
+            
+        # 每小时运行一次
+        await asyncio.sleep(3600)
+
+# 获取群组列表
+@app.route('/api/groups', methods=['GET'])
+@login_required
+@async_route
+async def get_groups():
+    try:
+        logger.info("开始获取群组列表")
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        # 从消息记录中获取唯一的群组信息
+        c.execute('''
+            SELECT DISTINCT chat_id, chat_title 
+            FROM messages 
+            WHERE chat_type IN ('group', 'supergroup') 
+            ORDER BY chat_title
+        ''')
+        
+        groups = [{'id': row[0], 'title': row[1]} for row in c.fetchall()]
+        conn.close()
+        
+        logger.info(f"成功获取群组列表，共 {len(groups)} 个群组")
+        for group in groups:
+            logger.info(f"群组: {group['title']} (ID: {group['id']})")
+        
+        return jsonify({
+            'status': 'success',
+            'groups': groups
+        })
+    except Exception as e:
+        logger.error(f"获取群组列表时发生错误: {str(e)}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+# 获取群组成员,由于 Telegram API 的限制，get_chat_members() 可能只能获取最近活跃的成员，而不是所有成员。这是 Telegram 的一个限制，不是代码的问题
+@app.route('/api/group_members/<string:chat_id>', methods=['GET'])
+@login_required
+@async_route
+async def get_group_members(chat_id):
+    try:
+        chat_id_int = int(chat_id)
+        logger.info(f"正在获取群组 {chat_id_int} 的成员列表")
+        
+        async with bot_manager.get_bot() as bot:
+            try:
+                # 首先检查机器人是否在群组中以及权限
+                chat = await bot.get_chat(chat_id_int)
+                bot_member = await bot.get_chat_member(chat_id_int, (await bot.get_me()).id)
+                logger.info(f"机器人在群组 {chat_id_int} 中的状态: {bot_member.status}")
+                
+                members = []
+                member_count = await bot.get_chat_member_count(chat_id_int)
+                logger.info(f"群组 {chat_id_int} 总成员数: {member_count}")
+                
+                # 获取管理员列表
+                admins = await bot.get_chat_administrators(chat_id_int)
+                admin_ids = set()
+                
+                # 将管理员添加到成员列表
+                for admin in admins:
+                    user = admin.user
+                    admin_ids.add(user.id)
+                    member_info = {
+                        'user_id': user.id,
+                        'full_name': user.full_name,
+                        'username': user.username,
+                        'status': admin.status,
+                        'custom_title': getattr(admin, 'custom_title', None),
+                        'is_admin': True,
+                        'last_active': None
+                    }
+                    members.append(member_info)
+                    logger.info(f"获取到管理员: {user.full_name} ({user.id})")
+                
+                # 获取最近的消息记录以识别活跃成员
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                
+                # 获取最近发送消息的用户ID和最后活跃时间
+                c.execute('''
+                    SELECT from_user_id, user_name, MAX(timestamp) as last_active
+                    FROM messages 
+                    WHERE chat_id = ? 
+                    AND from_user_id IS NOT NULL 
+                    AND from_user_id != 0
+                    GROUP BY from_user_id, user_name
+                    ORDER BY last_active DESC
+                    LIMIT 100
+                ''', (chat_id_int,))
+                
+                active_users = c.fetchall()
+                conn.close()
+                
+                # 获取活跃成员的详细信息
+                for user_id, user_name, last_active in active_users:
+                    if user_id not in admin_ids:  # 避免重复添加管理员
+                        try:
+                            member = await bot.get_chat_member(chat_id_int, user_id)
+                            if member.status not in ['left', 'kicked']:
+                                user = member.user
+                                member_info = {
+                                    'user_id': user.id,
+                                    'full_name': user.full_name or user_name,
+                                    'username': user.username,
+                                    'status': member.status,
+                                    'custom_title': None,
+                                    'is_admin': False,
+                                    'last_active': last_active
+                                }
+                                members.append(member_info)
+                                logger.info(f"获取到成员: {user.full_name or user_name} ({user.id})")
+                        except Exception as e:
+                            logger.warning(f"获取成员 {user_id} 信息失败: {str(e)}")
+                
+                # 按最后活跃时间排序
+                members.sort(key=lambda x: (not x['is_admin'], x['last_active'] or ''))
+                
+                logger.info(f"成功获取群组 {chat_id_int} 的成员列表，共 {len(members)} 名成员（总成员数：{member_count}）")
+                return jsonify({
+                    'status': 'success',
+                    'members': members,
+                    'total_members': member_count,
+                    'visible_members': len(members),
+                    'chat_title': chat.title
+                })
+                
+            except telegram.error.Forbidden as e:
+                logger.error(f"没有权限访问群组 {chat_id_int}: {str(e)}")
+                return jsonify({
+                    'status': 'error',
+                    'message': '机器人没有访问该群组的权限'
+                }), 403
+            except telegram.error.BadRequest as e:
+                logger.error(f"无效的群组 ID {chat_id_int}: {str(e)}")
+                return jsonify({
+                    'status': 'error',
+                    'message': '无效的群组ID或群组不存在'
+                }), 400
+                
+    except Exception as e:
+        logger.error(f"获取群组 {chat_id} 成员列表时发生错误: {str(e)}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': f'获取成员列表失败: {str(e)}'
+        }), 500
 @app.route('/auto_mute/list', methods=['GET'])
 @login_required
 def list_auto_mute_settings():
@@ -773,7 +1588,7 @@ def logout():
 @app.route('/')
 @login_required
 def home():
-    return app.send_static_file('index.html')
+    return render_template('index.html', admin_id=TELEGRAM['ADMIN_ID'])
 
 @app.route('/messages', methods=['GET'])
 @login_required
@@ -784,6 +1599,7 @@ def get_messages():
         per_page = request.args.get('per_page', 50, type=int)
         chat_type = request.args.get('chat_type', 'all')
         message_type = request.args.get('message_type', 'all')
+        group_id = request.args.get('group_id', 'all')  # 添加群组ID参数
         offset = (page - 1) * per_page
         
         conn = sqlite3.connect(DB_PATH)
@@ -809,6 +1625,11 @@ def get_messages():
             base_query += " AND message_type = ?"
             count_query += " AND message_type = ?"
             query_params.append(message_type)
+
+        if group_id != 'all':
+            base_query += " AND chat_id = ?"
+            count_query += " AND chat_id = ?"
+            query_params.append(group_id)
         
         # 获取总数
         c.execute(count_query, query_params)
@@ -1397,6 +2218,532 @@ async def unmute_all():
             'status': 'error',
             'message': '操作失败，请重试'
         }), 500
+
+@app.route('/spam_filter/settings', methods=['GET', 'POST'])
+@login_required
+@async_route  # 添加这个装饰器
+async def spam_filter_settings():
+    """获取或更新垃圾信息过滤设置"""
+    try:
+        if request.method == 'GET':
+            chat_id = request.args.get('chat_id')
+            if not chat_id:
+                return jsonify({
+                    'status': 'error',
+                    'message': '缺少群组ID'
+                }), 400
+
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            
+            c.execute('''
+                SELECT enabled, rules
+                FROM spam_filter_settings 
+                WHERE chat_id = ?
+            ''', (chat_id,))
+            
+            row = c.fetchone()
+            if row:
+                settings = {
+                    'enabled': bool(row[0]),
+                    'rules': json.loads(row[1] if row[1] else '[]')
+                }
+            else:
+                settings = {
+                    'enabled': False,
+                    'rules': []
+                }
+            
+            conn.close()
+            return jsonify({
+                'status': 'success',
+                'settings': settings
+            })
+            
+        else:  # POST
+            data = request.get_json()
+            if not data:
+                return jsonify({
+                    'status': 'error',
+                    'message': '无效的请求数据'
+                }), 400
+
+            chat_id = data.get('chat_id')
+            enabled = data.get('enabled', False)
+            rules = data.get('rules', [])
+            
+            if not chat_id:
+                return jsonify({
+                    'status': 'error',
+                    'message': '缺少群组ID'
+                }), 400
+
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            now = datetime.now(CHINA_TZ).strftime('%Y-%m-%d %H:%M:%S')
+            
+            try:
+                c.execute('''
+                    INSERT INTO spam_filter_settings 
+                    (chat_id, enabled, rules, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(chat_id) DO UPDATE SET
+                    enabled=excluded.enabled,
+                    rules=excluded.rules,
+                    updated_at=excluded.updated_at
+                ''', (chat_id, enabled, json.dumps(rules), now))
+                
+                conn.commit()
+                
+                return jsonify({
+                    'status': 'success',
+                    'message': '设置已更新'
+                })
+            finally:
+                conn.close()
+            
+    except Exception as e:
+        logger.error(f"Error in spam_filter_settings: {str(e)}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+# 新增路由：获取入群设置
+@app.route('/join_settings', methods=['GET'])
+@login_required
+def get_join_settings():
+    try:
+        chat_id = request.args.get('chat_id')
+        if not chat_id:
+            return jsonify({
+                'status': 'error',
+                'message': '缺少群组ID'
+            }), 400
+
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        c.execute('''
+            SELECT enabled, verify_type, question, answer, 
+                   welcome_message, timeout, updated_at
+            FROM join_settings 
+            WHERE chat_id = ?
+        ''', (chat_id,))
+        
+        row = c.fetchone()
+        if row:
+            settings = {
+                'enabled': bool(row[0]),
+                'verify_type': row[1],
+                'question': row[2],
+                'answer': row[3],
+                'welcome_message': row[4],
+                'timeout': row[5],
+                'updated_at': row[6]
+            }
+        else:
+            settings = {
+                'enabled': False,
+                'verify_type': 'question',
+                'question': '',
+                'answer': '',
+                'welcome_message': '',
+                'timeout': 300
+            }
+        
+        return jsonify({
+            'status': 'success',
+            'settings': settings
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting join settings: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+# 新增路由：更新入群设置
+@app.route('/join_settings', methods=['POST'])
+@login_required
+@async_route
+async def update_join_settings():
+    try:
+        data = request.get_json()
+        chat_id = data.get('chat_id')
+        if not chat_id:
+            return jsonify({
+                'status': 'error',
+                'message': '缺少群组ID'
+            }), 400
+
+        enabled = data.get('enabled', False)
+        verify_type = data.get('verify_type', 'question')
+        question = data.get('question', '')
+        answer = data.get('answer', '')
+        welcome_message = data.get('welcome_message', '')
+        timeout = data.get('timeout', 300)
+
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        now = datetime.now(CHINA_TZ).strftime('%Y-%m-%d %H:%M:%S')
+        
+        c.execute('''
+            INSERT INTO join_settings 
+            (chat_id, enabled, verify_type, question, answer, 
+             welcome_message, timeout, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+            enabled=excluded.enabled,
+            verify_type=excluded.verify_type,
+            question=excluded.question,
+            answer=excluded.answer,
+            welcome_message=excluded.welcome_message,
+            timeout=excluded.timeout,
+            updated_at=excluded.updated_at
+        ''', (chat_id, enabled, verify_type, question, answer, 
+              welcome_message, timeout, now))
+        
+        conn.commit()
+
+        # 如果启用了验证，发送通知到群组
+        if enabled:
+            async with bot_manager.get_bot() as bot:
+                notification = (
+                    "📢 入群验证已开启\n\n"
+                    f"🔒 验证方式：{'入群问答' if verify_type == 'question' else '管理员审核'}\n"
+                    f"⏰ 验证时限：{timeout} 秒\n\n"
+                    "ℹ️ 新成员加入时将自动开始验证流程"
+                )
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=notification,
+                    parse_mode='HTML'
+                )
+
+        return jsonify({
+            'status': 'success',
+            'message': '设置已更新'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error updating join settings: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+# 新增路由：获取待验证用户列表
+@app.route('/pending_members', methods=['GET'])
+@login_required
+def get_pending_members():
+    try:
+        chat_id = request.args.get('chat_id')
+        if not chat_id:
+            return jsonify({
+                'status': 'error',
+                'message': '缺少群组ID'
+            }), 400
+
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        c.execute('''
+            SELECT user_id, username, full_name, join_time, 
+                   verify_deadline, status
+            FROM pending_members 
+            WHERE chat_id = ? AND status = 'pending'
+            ORDER BY join_time DESC
+        ''', (chat_id,))
+        
+        members = []
+        for row in c.fetchall():
+            members.append({
+                'user_id': row[0],
+                'username': row[1],
+                'full_name': row[2],
+                'join_time': row[3],
+                'verify_deadline': row[4],
+                'status': row[5]
+            })
+        
+        return jsonify({
+            'status': 'success',
+            'members': members
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting pending members: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+# 新增路由：处理验证结果
+@app.route('/verify_member', methods=['POST'])
+@login_required
+@async_route
+async def verify_member():
+    try:
+        data = request.get_json()
+        chat_id = data.get('chat_id')
+        user_id = data.get('user_id')
+        approved = data.get('approved', False)
+        
+        if not chat_id or not user_id:
+            return jsonify({
+                'status': 'error',
+                'message': '缺少必要参数'
+            }), 400
+
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        # 更新用户状态
+        c.execute('''
+            UPDATE pending_members
+            SET status = ?
+            WHERE chat_id = ? AND user_id = ?
+        ''', ('approved' if approved else 'rejected', chat_id, user_id))
+        
+        conn.commit()
+
+        # 处理验证结果
+        async with bot_manager.get_bot() as bot:
+            if approved:
+                # 解除限制
+                permissions = ChatPermissions(
+                    can_send_messages=True,
+                    can_send_polls=True,
+                    can_send_other_messages=True,
+                    can_add_web_page_previews=True
+                )
+                await bot.restrict_chat_member(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    permissions=permissions
+                )
+                
+                # 发送通过通知
+                success_msg = f"✅ 用户已通过管理员验证，欢迎加入！"
+                await send_auto_delete_message(
+                    bot=bot,
+                    chat_id=chat_id,
+                    text=success_msg,
+                    parse_mode='HTML'
+                )
+                
+                # 查询欢迎消息
+                c.execute('''
+                    SELECT welcome_message
+                    FROM join_settings 
+                    WHERE chat_id = ?
+                ''', (chat_id,))
+                result = c.fetchone()
+                if result and result[0]:
+                    welcome_msg = result[0]
+                    await send_auto_delete_message(
+                        bot=bot,
+                        chat_id=chat_id,
+                        text=welcome_msg,
+                        parse_mode='HTML'
+                    )
+            else:
+                # 移出用户
+                await bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+                await bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
+                
+                # 发送拒绝通知
+                reject_msg = "❌ 管理员已拒绝验证请求"
+                await send_auto_delete_message(
+                    bot=bot,
+                    chat_id=chat_id,
+                    text=reject_msg
+                )
+
+        return jsonify({
+            'status': 'success',
+            'message': '验证处理完成'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error verifying member: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+# 新增白名单相关路由
+@app.route('/spam_filter/whitelist', methods=['GET'])
+@login_required
+def get_whitelist():
+    """获取垃圾信息过滤白名单"""
+    try:
+        chat_id = request.args.get('chat_id')
+        if not chat_id:
+            return jsonify({
+                'status': 'error',
+                'message': '缺少群组ID'
+            }), 400
+
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        c.execute('''
+            SELECT user_id, username, full_name, added_by, added_at, note
+            FROM spam_filter_whitelist 
+            WHERE chat_id = ?
+            ORDER BY added_at DESC
+        ''', (chat_id,))
+        
+        whitelist = [{
+            'user_id': row[0],
+            'username': row[1],
+            'full_name': row[2],
+            'added_by': row[3],
+            'added_at': row[4],
+            'note': row[5]
+        } for row in c.fetchall()]
+        
+        return jsonify({
+            'status': 'success',
+            'whitelist': whitelist
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting whitelist: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+# 修改添加到白名单的路由
+@app.route('/spam_filter/whitelist', methods=['POST'])
+@login_required
+@async_route  # 添加这个装饰器
+async def add_to_whitelist():
+    """添加用户到白名单"""
+    try:
+        data = request.get_json()
+        chat_id = data.get('chat_id')
+        user_id = data.get('user_id')
+        added_by = data.get('added_by')  # 管理员ID
+        note = data.get('note', '')
+        
+        if not all([chat_id, user_id, added_by]):
+            return jsonify({
+                'status': 'error',
+                'message': '缺少必要参数'
+            }), 400
+
+        # 获取用户信息
+        async with bot_manager.get_bot() as bot:
+            try:
+                chat_member = await bot.get_chat_member(chat_id, user_id)
+                user = chat_member.user
+                username = user.username
+                full_name = user.full_name
+            except Exception as e:
+                logger.error(f"Error getting user info: {str(e)}")
+                username = None
+                full_name = None
+
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        try:
+            c.execute('''
+                INSERT INTO spam_filter_whitelist 
+                (chat_id, user_id, username, full_name, added_by, note)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (chat_id, user_id, username, full_name, added_by, note))
+            
+            conn.commit()
+            
+            return jsonify({
+                'status': 'success',
+                'message': '用户已添加到白名单'
+            })
+            
+        except sqlite3.IntegrityError:
+            return jsonify({
+                'status': 'error',
+                'message': '该用户已在白名单中'
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"Error adding to whitelist: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+@app.route('/spam_filter/whitelist', methods=['DELETE'])
+@login_required
+def remove_from_whitelist():
+    """从白名单中移除用户"""
+    try:
+        data = request.get_json()
+        chat_id = data.get('chat_id')
+        user_id = data.get('user_id')
+        
+        if not all([chat_id, user_id]):
+            return jsonify({
+                'status': 'error',
+                'message': '缺少必要参数'
+            }), 400
+
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        c.execute('''
+            DELETE FROM spam_filter_whitelist 
+            WHERE chat_id = ? AND user_id = ?
+        ''', (chat_id, user_id))
+        
+        conn.commit()
+        
+        if c.rowcount == 0:
+            return jsonify({
+                'status': 'error',
+                'message': '用户不在白名单中'
+            }), 404
+        
+        return jsonify({
+            'status': 'success',
+            'message': '用户已从白名单中移除'
+        })
+        
+    except Exception as e:
+        logger.error(f"Error removing from whitelist: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
 async def init_app():
     """初始化应用"""
     try:
@@ -1412,14 +2759,14 @@ async def init_app():
             await bot.delete_webhook()
             logger.info("Deleted existing webhook")
             
-            # 设置新的 webhook
+            # 使用配置文件中的 WEBHOOK_URL
             success = await bot.set_webhook(
-                url=WEBHOOK_URL,
+                url=TELEGRAM['WEBHOOK_URL'],  # 修改这里
                 allowed_updates=['message', 'edited_message', 'channel_post', 'edited_channel_post']
             )
             
             if success:
-                logger.info(f"Successfully set webhook to: {WEBHOOK_URL}")
+                logger.info(f"Successfully set webhook to: {TELEGRAM['WEBHOOK_URL']}")  # 这里也要修改
                 # 验证设置
                 new_webhook_info = await bot.get_webhook_info()
                 logger.info(f"New webhook info: {new_webhook_info.to_dict()}")
@@ -1607,7 +2954,7 @@ if __name__ == '__main__':
         try:
             logger.info("=== 服务器启动 ===")
             
-            # 创建一个任务列表
+            # 创建任务列表
             tasks = []
             
             # 初始化应用
@@ -1618,10 +2965,18 @@ if __name__ == '__main__':
             scheduler_task = asyncio.create_task(auto_mute_scheduler())
             tasks.append(scheduler_task)
             
-            # 启动 Flask 应用（在单独的线程中运行）
+            # 启动过期验证清理任务
+            cleaner_task = asyncio.create_task(clean_expired_verifications())
+            tasks.append(cleaner_task)
+            
+            # 启动 Flask 应用
             from threading import Thread
             def run_flask():
-                app.run(host='127.0.0.1', port=15001, use_reloader=False)
+                app.run(
+                    host=SERVER['HOST'], 
+                    port=SERVER['PORT'], 
+                    use_reloader=False
+                )
             
             flask_thread = Thread(target=run_flask)
             flask_thread.daemon = True
@@ -1629,6 +2984,7 @@ if __name__ == '__main__':
             
             logger.info("Flask 应用已启动")
             logger.info("自动禁言调度器已启动")
+            logger.info("验证记录清理任务已启动")
             
             # 等待所有任务完成
             await asyncio.gather(*tasks)

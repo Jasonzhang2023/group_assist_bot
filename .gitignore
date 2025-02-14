@@ -1,0 +1,36 @@
+# 配置文件
+config.py
+
+# Python 编译文件
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+
+# 日志文件
+logs/
+*.log
+
+# 数据库文件
+data/
+*.db
+*.sqlite3
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 环境文件
+venv/
+env/
+.env
+
+# IDE 配置文件
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 临时文件
+tmp/
+temp/
