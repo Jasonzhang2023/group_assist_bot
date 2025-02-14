@@ -1,6 +1,6 @@
 # 操作说明
 ```bash
-##1. 新建必要的文件夹
+1. 新建必要的文件夹
 mkdir -p /home/tel_group_ass/static/js
 mkdir -p /home/tel_group_ass/templates
 
