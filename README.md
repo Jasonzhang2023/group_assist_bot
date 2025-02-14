@@ -19,6 +19,11 @@ mkdir -p /home/tel_group_ass/templates
 ├── telegram-bot.py
 └── templates
     └── index.html
+
+或者你也可以直接从github上克隆下来（确保 /home/tel_group_ass 目录在你执行克隆操作前不存在）
+git clone https://github.com/Jasonzhang2023/group_assist_bot /home/tel_group_ass
+
+
 文件都保存好后，记得改属性：
 chmod +x /home/tel_group_ass/telegram-bot.py /home/tel_group_ass/static/login.html /home/tel_group_ass/templates/index.html
 chmod +x /home/tel_group_ass/static/js/GroupAdminPanel.js /home/tel_group_ass/static/js/messages.js /home/tel_group_ass/static/js/SpamFilterPanel.js /home/tel_group_ass/static/js/JoinVerificationPanel.js
