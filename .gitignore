@@ -1,5 +1,5 @@
 # 配置文件
-config.py
+#config.py
 
 # Python 编译文件
 *.pyc
