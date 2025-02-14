@@ -1,18 +1,11 @@
- Markdown 格式：
-
-markdown
-Copy
 # 操作说明
 
-## 1. 新建必要的文件夹
-```bash
+1. 新建必要的文件夹
 mkdir -p /home/tel_group_ass/static/js
 mkdir -p /home/tel_group_ass/templates
-##2. 将必要的文件内容复制下来，并放入对应的文件夹
-文件树如下：
 
-arduino
-Copy
+2. 将必要的文件内容复制下来，并放入对应的文件夹
+文件树如下：
 /home/tel_group_ass
 ├── config.py
 ├── static
@@ -27,16 +20,11 @@ Copy
 └── templates
     └── index.html
 文件都保存好后，记得改属性：
-
-bash
-Copy
 chmod +x /home/tel_group_ass/telegram-bot.py /home/tel_group_ass/static/login.html /home/tel_group_ass/templates/index.html
 chmod +x /home/tel_group_ass/static/js/GroupAdminPanel.js /home/tel_group_ass/static/js/messages.js /home/tel_group_ass/static/js/SpamFilterPanel.js /home/tel_group_ass/static/js/JoinVerificationPanel.js
-或者你也可以直接从github上克隆下来（未完成，待补）
-
+或者你也可以直接从github上克隆下来
 这些文件你需要修改的地方有：
-
-config.py
+config.py（可以看着修改）
 其他主体文件就不需要修改，直接用即可。
 
 3. Nginx的配置
@@ -44,15 +32,12 @@ config.py
 
 第4行，你的网址，和config.py中的网址保持一致
 第6、7行，证书地址
+
 4. 配置进程保护 telegram_group_assistant.service
-bash
-Copy
+
 touch /etc/systemd/system/telegram_group_assistant.service
 nano /etc/systemd/system/telegram_group_assistant.service
 填入以下内容：
-
-ini
-Copy
 [Unit]
 Description=Telegram Group assistant
 After=network.target
@@ -71,39 +56,28 @@ WantedBy=multi-user.target
 步骤 1: 安装虚拟环境支持工具
 首先，确保你的系统安装了 python3-venv 包，这允许你创建和管理虚拟环境。
 
-bash
-Copy
 sudo apt update
 sudo apt install python3-venv
 步骤 2: 创建一个虚拟环境
 选择一个目录来创建虚拟环境。例如，你可以在你的用户目录下创建一个名为 venv 的环境：
 
-bash
-Copy
 python3 -m venv ~/venv
 步骤 3: 激活虚拟环境
 在安装任何包之前，你需要激活虚拟环境：
 
-bash
-Copy
+
 source ~/venv/bin/activate
 要退出虚拟环境：
 
-bash
-Copy
 deactivate
 6. 进入虚拟环境，安装必要的工具
-bash
-Copy
+
 source ~/venv/bin/activate
 pip install Flask request jsonify session redirect url_for send_file timedelta httpx HTTPXRequest RotatingFileHandler check_password_hash
 （如果运行的时候提示缺少工具，那么就pip install 这个工具名字）
 
 7. 确保上面步骤都操作和填写好你的信息后，就可以启动进程了
 输入：
-
-bash
-Copy
 sudo systemctl daemon-reload
 
 sudo systemctl enable telegram_group_assistant.service
