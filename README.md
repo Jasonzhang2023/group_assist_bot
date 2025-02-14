@@ -8,7 +8,7 @@ Copy
 ```bash
 mkdir -p /home/tel_group_ass/static/js
 mkdir -p /home/tel_group_ass/templates
-2. 将必要的文件内容复制下来，并放入对应的文件夹
+##2. 将必要的文件内容复制下来，并放入对应的文件夹
 文件树如下：
 
 arduino
