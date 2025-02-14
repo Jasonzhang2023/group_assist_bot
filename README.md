@@ -1,24 +1,36 @@
 1、新建必要的文件夹
 mkdir -p /home/tel_group_ass/static/js
+mkdir -p /home/tel_group_ass/templates
+2、将必要的文件内容复制下来，并放入对应的文件夹，文件树如下：
 
-2、将必要的文件内容复制下来，并放入对应的文件夹
-
+/home/tel_group_ass
+├── config.py
+├── static
+│   ├── js
+│   │   ├── GroupAdminPanel.js
+│   │   ├── GroupMembersPanel.js
+│   │   ├── JoinVerificationPanel.js
+│   │   ├── messages.js
+│   │   └── SpamFilterPanel.js
+│   └── login.html
+├── telegram-bot.py
+└── templates
+    └── index.html
 
 文件都保存好后，记得改属性
-chmod +x /home/tel_group_ass/telegram-bot.py /home/tel_group_ass/static/login.html /home/tel_group_ass/static/index.html
-chmod +x /home/tel_group_ass/static/js/GroupAdminPanel.js /home/tel_group_ass/static/js/messages.js
+chmod +x /home/tel_group_ass/telegram-bot.py /home/tel_group_ass/static/login.html /home/tel_group_ass/templates/index.html
+chmod +x /home/tel_group_ass/static/js/GroupAdminPanel.js /home/tel_group_ass/static/js/messages.js /home/tel_group_ass/static/js/SpamFilterPanel.js /home/tel_group_ass/static/js/JoinVerificationPanel.js
+
+或者你也可以直接从github上克隆下来（未完成，待补）
 
 这些文件你需要修改的地方有：
-telegram-bot.py中
-66行，你的机器人token api ：TOKEN = "your-token"
-67行，生成机器人token api的telegram 账号id ：ADMIN_ID = 66666666
-68行，你的网址：WEBHOOK_URL = "https://your.website.com/webhook"
-131行，登录你的网址的密码：ACCESS_TOKEN = "passwall"
+config.py中
+
 其他主体文件就不需要修改，直接用即可
 
 3、nginx的配置
 因为用了webhook，所以要用反代，nginx的配置文件你可以放到你的nginx的conf文件夹内，nginx内需要修改的地方为：
-4行，你的网址，和telegram-bot.py中的网址保持一致
+4行，你的网址，和config.py中的网址保持一致
 6、7行，证书地址
 
 4、配置进程保护telegram_group_assistant.service
@@ -80,7 +92,3 @@ sudo systemctl status telegram_group_assistant.service
 
 8、你需要将你的机器人加入到群内，并升级为admin管理员，就可以愉快的管理群了。
 输入你的网址，会提示你输入密码后，就能见到操作界面
-
-9、目前还缺少的功能有：
-缺少进群验证，这个后续再让我的职员claude.ai以及chatgpt帮我写出来，各位MJJ有什么建议也可以说一下，我的职员不一定有这个能力写出来
-
