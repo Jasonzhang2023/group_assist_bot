@@ -1,3 +1,5 @@
+![image](https://boat.990599.xyz/20250214-telegram_group_assist.png)
+![image](https://boat.990599.xyz/20250214-telegram_group_assist1.png)
 # 操作说明
 ```bash
 1. 新建必要的文件夹
