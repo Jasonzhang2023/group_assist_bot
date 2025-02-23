@@ -379,17 +379,17 @@ function GroupAdminPanel() {
   };
 
   return React.createElement('div', { className: 'space-y-4' }, [
-    // 主布局容器
+    // 主布局容器 - 使用固定高度
     React.createElement('div', { 
       key: 'main-container',
-      className: 'flex gap-4 min-h-[calc(100vh-200px)]'
+      className: 'flex gap-4'
     }, [
-      // 左侧面板：群组成员列表
+      // 左侧面板：群组成员列表 - 设置最大高度和固定高度
       React.createElement('div', { 
         key: 'left-panel',
-        className: 'w-1/4 min-w-[300px]'
+        className: 'w-1/4 min-w-[300px] max-h-[600px]' 
       }, 
-        React.createElement(window.GroupMembersPanel)
+        React.createElement(GroupMembersPanel)
       ),
 
       // 中间面板：管理控制面板
@@ -760,7 +760,7 @@ function GroupAdminPanel() {
         )
       ]),
 
-      // 右侧面板：自动禁言状态
+      // 右侧面板：自动禁言状态面板
       React.createElement('div', { 
         key: 'right-panel',
         className: 'w-72'
@@ -770,7 +770,6 @@ function GroupAdminPanel() {
     ])
   ]);
 }
-
 // 将组件暴露到全局作用域
 window.GroupAdminPanel = GroupAdminPanel;
 

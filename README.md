@@ -31,7 +31,7 @@ chmod +x /home/tel_group_ass/telegram-bot.py /home/tel_group_ass/static/login.ht
 chmod +x /home/tel_group_ass/static/js/GroupAdminPanel.js /home/tel_group_ass/static/js/messages.js /home/tel_group_ass/static/js/SpamFilterPanel.js /home/tel_group_ass/static/js/JoinVerificationPanel.js
 或者你也可以直接从github上克隆下来
 这些文件你需要修改的地方有：
-config.py（可以看着修改）
+config.py（可以看着修改，小白也能看得懂需要修改的地方，我就不赘述了）
 其他主体文件就不需要修改，直接用即可。
 
 3. Nginx的配置
@@ -93,4 +93,4 @@ sudo systemctl start telegram_group_assistant.service
 
 sudo systemctl status telegram_group_assistant.service
 8. 你需要将你的机器人加入到群内，并升级为admin管理员，就可以愉快的管理群了。
-输入你的网址，会提示你输入密码后，就能见到操作界面
+输入你的网址，会提示你输入密码（config.py中配置好的）后，就能见到操作界面
