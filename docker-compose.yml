@@ -1,0 +1,15 @@
+version: '3'
+
+services:
+  telegram-bot:
+    image: jasonzhang2024/telegram-group-bot:latest
+    container_name: telegram-group-bot
+    restart: unless-stopped
+    ports:
+      - "${PORT:-15001}:15001"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config.py:/app/config.py
+    environment:
+      - TZ=Asia/Shanghai
