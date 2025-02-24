@@ -10,6 +10,6 @@ services:
     volumes:
       - /home/docker/telegram-bot/data:/app/data
       - /home/docker/telegram-bot/logs:/app/logs
-      - ./config.py:/app/config.py  
+      - /home/docker/telegram-bot/config.py:/app/config.py  
     environment:
       - TZ=Asia/Shanghai
