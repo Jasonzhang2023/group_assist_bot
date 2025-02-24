@@ -2,6 +2,7 @@
 ![image](https://boat.990599.xyz/20250214-telegram_group_assist1.png)
 # 操作说明
 ```bash
+=========py版本，小白可以看下面的docker版本====================================
 1. 新建必要的文件夹
 mkdir -p /home/tel_group_ass/static/js
 mkdir -p /home/tel_group_ass/templates
@@ -93,4 +94,45 @@ sudo systemctl start telegram_group_assistant.service
 
 sudo systemctl status telegram_group_assistant.service
 8. 你需要将你的机器人加入到群内，并升级为admin管理员，就可以愉快的管理群了。
+输入你的网址，会提示你输入密码（config.py中配置好的）后，就能见到操作界面
+
+=========docker版本====================================
+1、在服务器上部署：
+# 创建必要的目录
+mkdir -p /home/docker/telegram-bot/{data,logs}
+mkdir -p /home/docker/telegram-bot/data/files
+chmod -R 755 /home/docker/telegram-bot
+
+
+
+2、下载必要的文件
+# 进入文件夹
+cd /home/docker/telegram-bot
+
+# 复制配置文件模板,并修改为你的配置信息config.py
+wget https://raw.githubusercontent.com/Jasonzhang2023/group_assist_bot/refs/heads/master/docker-config.py -O config.py
+
+# 编辑配置文件（小白都可以看得懂的，请自行修改）
+nano config.py
+
+修改必须的几个参数：
+TELEGRAM = {
+    'BOT_TOKEN': 'YOUR_BOT_TOKEN',  # 替换为你的bot token
+    'ADMIN_ID': 123456789,          # 替换为你的管理员ID（整数）
+    'WEBHOOK_URL': 'https://your-domain.com/webhook'  # 替换为你的webhook URL
+}
+
+'ACCESS_TOKEN': 'your-access-token'          # 替换为你的访问令牌
+
+
+# 下载 docker-compose.yml
+wget https://raw.githubusercontent.com/Jasonzhang2023/group_assist_bot/refs/heads/master/docker-compose.yml
+
+3、 启动服务
+docker-compose up -d
+
+4、配置nginx（选择docker-nginx_website.conf 并保存到你的nginx配置文件中）
+
+
+5、你需要将你的机器人加入到群内，并升级为admin管理员，就可以愉快的管理群了。
 输入你的网址，会提示你输入密码（config.py中配置好的）后，就能见到操作界面
