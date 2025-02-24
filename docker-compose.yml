@@ -8,8 +8,8 @@ services:
     ports:
       - "${PORT:-15001}:15001"
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./config.py:/app/config.py
+      - /home/docker/telegram-bot/data:/app/data
+      - /home/docker/telegram-bot/logs:/app/logs
+      - ./config.py:/app/config.py  
     environment:
       - TZ=Asia/Shanghai
