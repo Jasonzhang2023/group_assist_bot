@@ -103,8 +103,6 @@ mkdir -p /home/docker/telegram-bot/{data,logs}
 mkdir -p /home/docker/telegram-bot/data/files
 chmod -R 755 /home/docker/telegram-bot
 
-
-
 2、下载必要的文件
 # 进入文件夹
 cd /home/docker/telegram-bot
@@ -123,7 +121,6 @@ TELEGRAM = {
 }
 
 'ACCESS_TOKEN': 'your-access-token'          # 替换为你的访问令牌
-
 
 # 下载 docker-compose.yml
 wget https://raw.githubusercontent.com/Jasonzhang2023/group_assist_bot/refs/heads/master/docker-compose.yml
